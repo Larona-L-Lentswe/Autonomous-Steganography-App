@@ -16,13 +16,24 @@ distortion.
 
 Grading Formula
 ---------------
-    grade = (w_psnr * norm_psnr) + (w_ssim * norm_ssim)
+    grade = (w_psnr * norm_psnr) + (w_ssim * norm_ssim) + (w_kl * norm_kl)
 
     where:
-        norm_psnr = min(psnr, PSNR_CAP) / PSNR_CAP   (0–1)
+        norm_psnr = min(psnr, PSNR_CAP) / PSNR_CAP   (0–1, higher = better)
         norm_ssim = (ssim + 1) / 2                    (0–1, ssim in [-1,1])
-        w_psnr    = 0.4
-        w_ssim    = 0.6  (SSIM weighted higher — perceptual quality)
+        norm_kl   = 1 / (1 + kl_divergence)           (0–1, lower KL = higher score)
+        w_psnr    = 0.25  — perceptual signal quality
+        w_ssim    = 0.45  — structural/perceptual similarity
+        w_kl      = 0.30  — statistical undetectability (higher weight = stealth focus)
+
+    KL Divergence rationale
+    -----------------------
+    KL divergence measures how much the pixel histogram distribution shifts
+    after embedding. A shift toward zero means the stego image is statistically
+    indistinguishable from the original — the core requirement for undetectability.
+    It is computed per RGB channel and averaged, giving a single scalar that
+    directly reflects how much the embedding disturbs the image's natural
+    pixel distribution.
 
 Public API
 ----------
@@ -38,9 +49,11 @@ from stegano import lsb
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 # ── Grading weights (must sum to 1.0)
-W_PSNR   = 0.4
-W_SSIM   = 0.6
+W_PSNR   = 0.25   # perceptual signal quality
+W_SSIM   = 0.45   # structural/perceptual similarity
+W_KL     = 0.30   # statistical undetectability
 PSNR_CAP = 60.0   # dB ceiling for normalisation (beyond this is imperceptible)
+KL_BINS  = 256    # histogram bins per channel (0–255 pixel values)
 
 
 # ─────────────────────────────────────────────
@@ -83,6 +96,53 @@ def _to_array(img: Image.Image) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
+#  KL DIVERGENCE
+# ─────────────────────────────────────────────
+def _kl_divergence(original_arr: np.ndarray, stego_arr: np.ndarray) -> float:
+    """
+    Compute the mean KL divergence between the pixel histogram distributions
+    of the original carrier and the stego image, averaged across RGB channels.
+
+    KL(P || Q) = sum(P * log(P / Q))
+
+    where:
+        P = normalised pixel histogram of the original carrier channel
+        Q = normalised pixel histogram of the stego image channel
+
+    A value close to 0 means the stego distribution is statistically
+    indistinguishable from the original — the ideal outcome for stealth.
+
+    A small epsilon is added to both histograms to prevent log(0) errors
+    on channels with sparse pixel values.
+    """
+    epsilon = 1e-10
+    kl_per_channel = []
+
+    for ch in range(3):  # R, G, B
+        p_hist, _ = np.histogram(
+            original_arr[:, :, ch].flatten(),
+            bins=KL_BINS, range=(0, 255), density=True
+        )
+        q_hist, _ = np.histogram(
+            stego_arr[:, :, ch].flatten(),
+            bins=KL_BINS, range=(0, 255), density=True
+        )
+
+        # Add epsilon to avoid division by zero and log(0)
+        p = p_hist + epsilon
+        q = q_hist + epsilon
+
+        # Normalise to valid probability distributions
+        p = p / p.sum()
+        q = q / q.sum()
+
+        kl = float(np.sum(p * np.log(p / q)))
+        kl_per_channel.append(kl)
+
+    return float(np.mean(kl_per_channel))
+
+
+# ─────────────────────────────────────────────
 #  GRADE A SINGLE PAIRING
 # ─────────────────────────────────────────────
 def grade_pairing(
@@ -97,8 +157,10 @@ def grade_pairing(
         fragment_index : int
         psnr           : float  (dB,  higher = better)
         ssim           : float  (0–1, higher = better)
+        kl_divergence  : float  (≥0,  lower  = better — closer to 0 = more undetectable)
         norm_psnr      : float  (0–1 normalised)
         norm_ssim      : float  (0–1 normalised)
+        norm_kl        : float  (0–1 normalised, inverted so higher = better)
         grade          : float  (0–1 composite score)
         success        : bool
         error          : str | None
@@ -107,8 +169,10 @@ def grade_pairing(
         "fragment_index": fragment["index"],
         "psnr":           0.0,
         "ssim":           0.0,
+        "kl_divergence":  0.0,
         "norm_psnr":      0.0,
         "norm_ssim":      0.0,
+        "norm_kl":        0.0,
         "grade":          0.0,
         "success":        False,
         "error":          None,
@@ -155,17 +219,33 @@ def grade_pairing(
     norm_psnr = min(psnr, psnr_cap) / psnr_cap          # 0–1
     norm_ssim = (ssim + 1.0) / 2.0                       # map [-1,1] → [0,1]
 
+    # ── KL Divergence
+    try:
+        kl = _kl_divergence(original_arr, stego_arr)
+    except Exception as e:
+        result["error"] = f"KL divergence computation failed: {e}"
+        return result
+
+    # Normalise KL: invert so that lower KL → higher score
+    # Using 1 / (1 + kl) maps [0, ∞) → (0, 1]
+    # KL=0 → norm_kl=1.0 (perfect, undetectable)
+    # KL=1 → norm_kl=0.5
+    # KL→∞ → norm_kl→0
+    norm_kl = 1.0 / (1.0 + kl)
+
     # ── Composite grade
-    grade = (W_PSNR * norm_psnr) + (W_SSIM * norm_ssim)
+    grade = (W_PSNR * norm_psnr) + (W_SSIM * norm_ssim) + (W_KL * norm_kl)
 
     result.update({
-        "psnr":      round(psnr,      4),
-        "ssim":      round(ssim,      6),
-        "norm_psnr": round(norm_psnr, 4),
-        "norm_ssim": round(norm_ssim, 4),
-        "grade":     round(grade,     6),
-        "success":   True,
-        "error":     None,
+        "psnr":          round(psnr,      4),
+        "ssim":          round(ssim,      6),
+        "kl_divergence": round(kl,        8),
+        "norm_psnr":     round(norm_psnr, 4),
+        "norm_ssim":     round(norm_ssim, 4),
+        "norm_kl":       round(norm_kl,   6),
+        "grade":         round(grade,     6),
+        "success":       True,
+        "error":         None,
     })
     return result
 
@@ -256,6 +336,8 @@ def pair_fragments_to_carriers(
                 "fragment_index": frag["index"],
                 "psnr":           report["psnr"],
                 "ssim":           report["ssim"],
+                "kl_divergence":  report["kl_divergence"],
+                "norm_kl":        report["norm_kl"],
                 "grade":          report["grade"],
                 "success":        report["success"],
                 "error":          report.get("error"),
@@ -265,6 +347,7 @@ def pair_fragments_to_carriers(
                 f"  frag[{frag['index']}] → "
                 f"PSNR={report['psnr']:.2f} dB  "
                 f"SSIM={report['ssim']:.4f}  "
+                f"KL={report['kl_divergence']:.6f}  "
                 f"grade={report['grade']:.4f}"
                 if report["success"]
                 else f"  frag[{frag['index']}] → FAILED: {report['error']}"
@@ -291,6 +374,7 @@ def pair_fragments_to_carriers(
             "fragment":       best_frag,
             "psnr":           best["psnr"],
             "ssim":           best["ssim"],
+            "kl_divergence":  best["kl_divergence"],
             "grade":          best["grade"],
             "all_grades":     all_grades,
         })
@@ -300,7 +384,8 @@ def pair_fragments_to_carriers(
             f"  ✓ Assigned frag[{best['fragment_index']}] → {carrier_name}  "
             f"(grade={best['grade']:.4f}  "
             f"PSNR={best['psnr']:.2f} dB  "
-            f"SSIM={best['ssim']:.4f})"))
+            f"SSIM={best['ssim']:.4f}  "
+            f"KL={best['kl_divergence']:.6f})"))
 
         # ── Remove assigned fragment from pool
         remaining = [f for f in remaining if f["index"] != best["fragment_index"]]
@@ -327,24 +412,35 @@ def format_grade_table(assignments: list[dict]) -> str:
     Useful for logging or displaying in the GUI log box.
     """
     lines = []
-    lines.append(f"{'Carrier':<30} {'Frag':>5} {'PSNR (dB)':>10} {'SSIM':>8} {'Grade':>8}")
-    lines.append("─" * 65)
+    lines.append(
+        f"{'Carrier':<30} {'Frag':>5} {'PSNR (dB)':>10} "
+        f"{'SSIM':>8} {'KL Div':>12} {'Grade':>8}"
+    )
+    lines.append("─" * 78)
     for a in assignments:
         lines.append(
             f"{a['carrier_name']:<30} "
             f"{a['fragment_index']:>5} "
             f"{a['psnr']:>10.4f} "
             f"{a['ssim']:>8.6f} "
+            f"{a['kl_divergence']:>12.8f} "
             f"{a['grade']:>8.6f}"
         )
-    lines.append("─" * 65)
-    avg_grade = sum(a["grade"] for a in assignments) / len(assignments) if assignments else 0
-    avg_psnr  = sum(a["psnr"]  for a in assignments) / len(assignments) if assignments else 0
-    avg_ssim  = sum(a["ssim"]  for a in assignments) / len(assignments) if assignments else 0
+    lines.append("─" * 78)
+    avg_grade = sum(a["grade"]         for a in assignments) / len(assignments) if assignments else 0
+    avg_psnr  = sum(a["psnr"]          for a in assignments) / len(assignments) if assignments else 0
+    avg_ssim  = sum(a["ssim"]          for a in assignments) / len(assignments) if assignments else 0
+    avg_kl    = sum(a["kl_divergence"] for a in assignments) / len(assignments) if assignments else 0
     lines.append(
         f"{'AVERAGE':<30} {'':>5} "
         f"{avg_psnr:>10.4f} "
         f"{avg_ssim:>8.6f} "
+        f"{avg_kl:>12.8f} "
         f"{avg_grade:>8.6f}"
+    )
+    lines.append("")
+    lines.append(
+        "  KL interpretation:  < 0.0001 = statistically undetectable  |  "
+        "> 0.001 = detectable distribution shift"
     )
     return "\n".join(lines)
