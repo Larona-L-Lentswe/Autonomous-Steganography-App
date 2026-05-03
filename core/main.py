@@ -18,6 +18,7 @@ from gui.theme import (
 )
 from gui.embed_frame   import EmbedFrame
 from gui.extract_frame import ExtractFrame
+from gui.report_frame  import ReportFrame
 
 
 # ─────────────────────────────────────────────
@@ -43,20 +44,39 @@ class ModeToggle(tk.Frame):
             relief="flat", bd=0, cursor="hand2", padx=28, pady=8,
             command=lambda: self._select("extract"))
 
+        self._report_btn = tk.Button(
+            self, text="REPORT", font=FONT_TOGGLE,
+            fg=TEXT_MUTED, bg=BG_PANEL,
+            activebackground=BG_PANEL, activeforeground=TEXT_PRIMARY,
+            relief="flat", bd=0, cursor="hand2", padx=28, pady=8,
+            command=lambda: self._select("report"))
+
         self._embed_btn.pack(side="left")
         tk.Frame(self, bg=BORDER, width=2).pack(side="left", fill="y")
         self._extr_btn.pack(side="left")
+        tk.Frame(self, bg=BORDER, width=2).pack(side="left", fill="y")
+        self._report_btn.pack(side="left")
 
     def _select(self, mode):
         if mode == self._mode:
             return
         self._mode = mode
-        if mode == "embed":
-            self._embed_btn.config(fg=BG_DARK,    bg=ACCENT_EMBED)
-            self._extr_btn.config( fg=TEXT_MUTED, bg=BG_PANEL)
-        else:
-            self._embed_btn.config(fg=TEXT_MUTED, bg=BG_PANEL)
-            self._extr_btn.config( fg=BG_DARK,    bg=ACCENT_EXTR)
+        # Reset all buttons to inactive style
+        for btn in (self._embed_btn, self._extr_btn, self._report_btn):
+            btn.config(fg=TEXT_MUTED, bg=BG_PANEL)
+        # Activate selected
+        accent_map = {
+            "embed":   (ACCENT_EMBED, BG_DARK),
+            "extract": (ACCENT_EXTR,  BG_DARK),
+            "report":  ("#FF9C00",    BG_DARK),
+        }
+        btn_map = {
+            "embed":   self._embed_btn,
+            "extract": self._extr_btn,
+            "report":  self._report_btn,
+        }
+        accent, fg = accent_map[mode]
+        btn_map[mode].config(fg=fg, bg=accent)
         self._on_change(mode)
 
 
@@ -103,6 +123,7 @@ class StegoApp(tk.Tk):
 
         self._embed_frame   = EmbedFrame(self._content, self)
         self._extract_frame = ExtractFrame(self._content, self)
+        self._report_frame  = ReportFrame(self._content, self)
         self._embed_frame.place(relwidth=1, relheight=1)
         self._active = "embed"
 
@@ -120,12 +141,15 @@ class StegoApp(tk.Tk):
         if mode == self._active:
             return
         self._active = mode
+        self._embed_frame.place_forget()
+        self._extract_frame.place_forget()
+        self._report_frame.place_forget()
         if mode == "embed":
-            self._extract_frame.place_forget()
             self._embed_frame.place(relwidth=1, relheight=1)
-        else:
-            self._embed_frame.place_forget()
+        elif mode == "extract":
             self._extract_frame.place(relwidth=1, relheight=1)
+        elif mode == "report":
+            self._report_frame.place(relwidth=1, relheight=1)
 
 
 # ─────────────────────────────────────────────
