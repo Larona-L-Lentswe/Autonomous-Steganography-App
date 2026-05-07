@@ -6,7 +6,7 @@ Comp 401 Final Project | Larona Lusindo Lentswe
 
 Reads a manifest.json and the corresponding stego images,
 locates the original carrier images, and recomputes all
-metrics (PSNR, SSIM, KL Divergence, BER) independently —
+metrics (PSNR, SSIM) independently —
 verifying the grades recorded at embed time.
 
 Public API
@@ -25,8 +25,6 @@ from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 THRESHOLDS = {
     "psnr":  {"excellent": 55,   "good": 45,   "poor": 35},
     "ssim":  {"excellent": 0.999,"good": 0.995,"poor": 0.98},
-    "kl":    {"excellent": 0.0001,"good": 0.001,"poor": 0.01},
-    "ber":   {"excellent": 0.001, "good": 0.005,"poor": 0.02},
 }
 
 
@@ -48,45 +46,12 @@ def _compute_ssim(orig: np.ndarray, stego: np.ndarray) -> float:
     ))
 
 
-def _compute_kl(orig: np.ndarray, stego: np.ndarray) -> float:
-    epsilon = 1e-10
-    kl_channels = []
-    for ch in range(3):
-        p, _ = np.histogram(orig[:, :, ch].flatten(),
-                            bins=256, range=(0, 255), density=True)
-        q, _ = np.histogram(stego[:, :, ch].flatten(),
-                            bins=256, range=(0, 255), density=True)
-        p = (p + epsilon) / (p + epsilon).sum()
-        q = (q + epsilon) / (q + epsilon).sum()
-        kl_channels.append(float(np.sum(p * np.log(p / q))))
-    return float(np.mean(kl_channels))
-
-
-def _compute_ber(orig: np.ndarray, stego: np.ndarray) -> float:
-    orig_bits  = np.unpackbits(orig.flatten())
-    stego_bits = np.unpackbits(stego.flatten())
-    return float(np.sum(orig_bits != stego_bits) / len(orig_bits))
-
-
-def _embedding_rate(fragment_bytes: int, image_pixels: int) -> float:
-    """Bits per pixel (bpp) — payload bits / available pixel bits."""
-    payload_bits = fragment_bytes * 8
-    pixel_bits   = image_pixels * 3   # 3 channels
-    return payload_bits / pixel_bits
-
-
 def _grade_label(metric: str, value: float) -> str:
     t = THRESHOLDS[metric]
-    if metric in ("psnr", "ssim"):
-        if value >= t["excellent"]: return "Excellent"
-        if value >= t["good"]:      return "Good"
-        if value >= t["poor"]:      return "Poor"
-        return "Unacceptable"
-    else:  # kl, ber — lower is better
-        if value <= t["excellent"]: return "Excellent"
-        if value <= t["good"]:      return "Good"
-        if value <= t["poor"]:      return "Poor"
-        return "Unacceptable"
+    if value >= t["excellent"]: return "Excellent"
+    if value >= t["good"]:      return "Good"
+    if value >= t["poor"]:      return "Poor"
+    return "Unacceptable"
 
 
 # ─────────────────────────────────────────────
@@ -177,17 +142,11 @@ def generate_report(
             "carrier_source":   carrier_src,
             "psnr":             None,
             "ssim":             None,
-            "kl_divergence":    None,
-            "ber":              None,
-            "bpp":              None,
             "psnr_label":       None,
             "ssim_label":       None,
-            "kl_label":         None,
-            "ber_label":        None,
             # Recorded grades from embed time (from manifest)
             "recorded_psnr":    entry.get("psnr"),
             "recorded_ssim":    entry.get("ssim"),
-            "recorded_kl":      entry.get("kl_divergence"),
             "recorded_grade":   entry.get("grade"),
             "error":            None,
         }
@@ -230,30 +189,16 @@ def generate_report(
         try:
             psnr = _compute_psnr(orig_arr, stego_arr)
             ssim = _compute_ssim(orig_arr, stego_arr)
-            kl   = _compute_kl(orig_arr, stego_arr)
-            ber  = _compute_ber(orig_arr, stego_arr)
-
-            # BPP — use fragment_size_bytes from manifest if available
-            frag_bytes = manifest.get("fragment_size_bytes",
-                         int(len(stego_arr.tobytes()) * ber / 8))
-            pixels     = orig_arr.shape[0] * orig_arr.shape[1]
-            bpp        = _embedding_rate(frag_bytes, pixels)
 
             frag_result.update({
                 "psnr":          round(psnr, 4),
                 "ssim":          round(ssim, 6),
-                "kl_divergence": round(kl,   8),
-                "ber":           round(ber,   8),
-                "bpp":           round(bpp,   6),
                 "psnr_label":    _grade_label("psnr", psnr),
                 "ssim_label":    _grade_label("ssim", ssim),
-                "kl_label":      _grade_label("kl",   kl),
-                "ber_label":     _grade_label("ber",  ber),
             })
 
             progress_queue.put(("progress", pct,
-                f"  PSNR={psnr:.2f} dB  SSIM={ssim:.4f}  "
-                f"KL={kl:.6f}  BER={ber:.6f}  BPP={bpp:.4f}"))
+                f"  PSNR={psnr:.2f} dB  SSIM={ssim:.4f}"))
 
         except Exception as e:
             frag_result["error"] = f"Metric computation failed: {e}"
@@ -268,48 +213,34 @@ def generate_report(
     if valid:
         avg_psnr = np.mean([f["psnr"] for f in valid])
         avg_ssim = np.mean([f["ssim"] for f in valid])
-        avg_kl   = np.mean([f["kl_divergence"] for f in valid])
-        avg_ber  = np.mean([f["ber"] for f in valid])
-        avg_bpp  = np.mean([f["bpp"] for f in valid])
 
-        # Overall stealth verdict
-        kl_undetectable  = avg_kl  < THRESHOLDS["kl"]["excellent"]
-        ber_undetectable = avg_ber < THRESHOLDS["ber"]["excellent"]
-        bpp_safe         = avg_bpp < 0.1   # below academic detection threshold
-
-        if kl_undetectable and ber_undetectable and bpp_safe:
-            verdict = "STATISTICALLY UNDETECTABLE"
+        # Overall verdict based on PSNR and SSIM
+        if avg_psnr >= THRESHOLDS["psnr"]["excellent"] and avg_ssim >= THRESHOLDS["ssim"]["excellent"]:
+            verdict = "EXCELLENT QUALITY"
             verdict_color = "green"
-        elif avg_kl < THRESHOLDS["kl"]["good"] and avg_ber < THRESHOLDS["ber"]["good"]:
-            verdict = "LOW DETECTION RISK"
+        elif avg_psnr >= THRESHOLDS["psnr"]["good"] and avg_ssim >= THRESHOLDS["ssim"]["good"]:
+            verdict = "GOOD QUALITY"
             verdict_color = "cyan"
-        elif avg_kl < THRESHOLDS["kl"]["poor"]:
-            verdict = "MODERATE DETECTION RISK"
+        elif avg_psnr >= THRESHOLDS["psnr"]["poor"] and avg_ssim >= THRESHOLDS["ssim"]["poor"]:
+            verdict = "ACCEPTABLE QUALITY"
             verdict_color = "orange"
         else:
-            verdict = "HIGH DETECTION RISK"
+            verdict = "POOR QUALITY"
             verdict_color = "red"
 
         report["summary"] = {
             "avg_psnr":        round(float(avg_psnr), 4),
             "avg_ssim":        round(float(avg_ssim), 6),
-            "avg_kl":          round(float(avg_kl),   8),
-            "avg_ber":         round(float(avg_ber),  8),
-            "avg_bpp":         round(float(avg_bpp),  6),
             "fragments_ok":    len(valid),
             "fragments_err":   len(per_fragment) - len(valid),
             "verdict":         verdict,
             "verdict_color":   verdict_color,
-            "bpp_safe":        bpp_safe,
-            "kl_undetectable": kl_undetectable,
-            "ber_undetectable":ber_undetectable,
         }
 
         progress_queue.put(("progress", 96,
             f"Overall verdict: {verdict}"))
         progress_queue.put(("progress", 96,
-            f"Avg PSNR={avg_psnr:.2f} dB  SSIM={avg_ssim:.4f}  "
-            f"KL={avg_kl:.6f}  BER={avg_ber:.6f}  BPP={avg_bpp:.4f}"))
+            f"Avg PSNR={avg_psnr:.2f} dB  SSIM={avg_ssim:.4f}"))
     else:
         report["summary"] = {"verdict": "NO DATA", "verdict_color": "red"}
 

@@ -4,7 +4,7 @@ gui/report_frame.py
 Steganalysis Report Frame — third mode in the toggle bar.
 Reads a manifest.json + original carrier folder, runs all
 metrics via report_engine, then opens a Matplotlib dashboard
-window with bar/line charts and a statistics table.
+window with bar charts and a statistics table.
 """
 
 import os
@@ -19,14 +19,13 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.patches import FancyBboxPatch
 
 from gui.theme import (
-    BG_DARK, BG_PANEL, BG_HOVER, BORDER,
+    BG_DARK, BG_PANEL, BORDER,
     ACCENT_EMBED, ACCENT_EXTR, TEXT_PRIMARY, TEXT_MUTED,
     TEXT_SUCCESS, TEXT_ERROR,
-    FONT_LABEL_B, FONT_STATUS, FONT_MONO, FONT_BTN,
-    make_panel, make_label, make_entry, make_button, make_browse_btn,
+    FONT_LABEL_B, FONT_STATUS, FONT_MONO,
+    make_panel, make_label, make_button, make_browse_btn,
 )
 from gui.widgets import ProgressBar, LogBox
 from core.report_engine import generate_report
@@ -41,14 +40,6 @@ MPL_RED     = "#FF4C6A"
 MPL_ORANGE  = "#FF9C00"
 MPL_TEXT    = "#E8EAF0"
 MPL_MUTED   = "#5A6070"
-
-METRIC_COLORS = {
-    "PSNR (dB)":    MPL_CYAN,
-    "SSIM":         MPL_GREEN,
-    "KL Divergence":MPL_ORANGE,
-    "BER":          MPL_RED,
-    "BPP":          "#A78BFA",
-}
 
 VERDICT_COLORS = {
     "green":  MPL_GREEN,
@@ -215,8 +206,8 @@ class ReportFrame(tk.Frame):
         win = tk.Toplevel(self)
         win.title("StegoVault — Steganalysis Report")
         win.configure(bg=MPL_BG)
-        win.geometry("1200x820")
-        win.minsize(900, 650)
+        win.geometry("1000x700")
+        win.minsize(800, 600)
 
         frags   = report["per_fragment"]
         summary = report["summary"]
@@ -246,13 +237,13 @@ class ReportFrame(tk.Frame):
                  fg=MPL_BG, bg=vcol).pack(side="right", padx=12, pady=8)
 
         # ── Matplotlib figure
-        fig = plt.Figure(figsize=(14, 9), facecolor=MPL_BG)
+        fig = plt.Figure(figsize=(12, 7), facecolor=MPL_BG)
         gs  = gridspec.GridSpec(
-            3, 3,
+            2, 2,
             figure=fig,
-            hspace=0.52, wspace=0.38,
-            left=0.06, right=0.97,
-            top=0.93, bottom=0.07,
+            hspace=0.45, wspace=0.38,
+            left=0.08, right=0.97,
+            top=0.90, bottom=0.12,
         )
 
         # ── Shared x-axis setup
@@ -262,15 +253,15 @@ class ReportFrame(tk.Frame):
         def _style_ax(ax, title, ylabel):
             ax.set_facecolor(MPL_PANEL)
             ax.set_title(title, color=TEXT_PRIMARY,
-                         fontsize=9, fontweight="bold",
-                         fontfamily="monospace", pad=6)
+                         fontsize=10, fontweight="bold",
+                         fontfamily="monospace", pad=8)
             ax.set_ylabel(ylabel, color=MPL_MUTED,
-                          fontsize=7.5, fontfamily="monospace")
+                          fontsize=8, fontfamily="monospace")
             ax.set_xlabel("Fragment Index", color=MPL_MUTED,
-                          fontsize=7.5, fontfamily="monospace")
+                          fontsize=8, fontfamily="monospace")
             ax.tick_params(colors=MPL_MUTED, labelsize=7)
             ax.set_xticks(x)
-            ax.set_xticklabels([str(i) for i in indices], fontsize=7)
+            ax.set_xticklabels([str(i) for i in indices], fontsize=8)
             for spine in ax.spines.values():
                 spine.set_edgecolor(MPL_BORDER)
             ax.grid(axis="y", color=MPL_BORDER,
@@ -297,7 +288,7 @@ class ReportFrame(tk.Frame):
         ax1.axhline(y=35, color=MPL_RED, linestyle=":",
                     linewidth=0.8, label="Poor threshold (35 dB)")
         _style_ax(ax1, "PSNR per Fragment", "PSNR (dB)")
-        ax1.legend(fontsize=6, labelcolor=MPL_MUTED,
+        ax1.legend(fontsize=7, labelcolor=MPL_MUTED,
                    facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
 
         # ── 2. SSIM bar chart
@@ -313,85 +304,15 @@ class ReportFrame(tk.Frame):
             min(1.005, max(ssim_vals) + 0.005)
         )
         _style_ax(ax2, "SSIM per Fragment", "SSIM Score")
-        ax2.legend(fontsize=6, labelcolor=MPL_MUTED,
+        ax2.legend(fontsize=7, labelcolor=MPL_MUTED,
                    facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
 
-        # ── 3. KL Divergence bar chart
-        ax3 = fig.add_subplot(gs[0, 2])
-        kl_vals = [f["kl_divergence"] for f in valid]
-        _bar(ax3, kl_vals, MPL_ORANGE, "KL Divergence")
-        ax3.axhline(y=0.0001, color=MPL_GREEN, linestyle="--",
-                    linewidth=0.8, label="Undetectable (<0.0001)")
-        ax3.axhline(y=0.001, color=MPL_RED, linestyle=":",
-                    linewidth=0.8, label="Risky (>0.001)")
-        _style_ax(ax3, "KL Divergence per Fragment", "KL Divergence")
-        ax3.legend(fontsize=6, labelcolor=MPL_MUTED,
-                   facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
+        # ── 3. Summary statistics table (bottom left)
+        ax3 = fig.add_subplot(gs[1, 0])
+        ax3.set_facecolor(MPL_BG)
+        ax3.axis("off")
 
-        # ── 4. BER bar chart
-        ax4 = fig.add_subplot(gs[1, 0])
-        ber_vals = [f["ber"] for f in valid]
-        _bar(ax4, ber_vals, MPL_RED, "BER")
-        ax4.axhline(y=0.001, color=MPL_GREEN, linestyle="--",
-                    linewidth=0.8, label="Excellent (<0.001)")
-        ax4.axhline(y=0.005, color=MPL_ORANGE, linestyle=":",
-                    linewidth=0.8, label="Good (<0.005)")
-        _style_ax(ax4, "Bit Error Rate (BER) per Fragment", "BER")
-        ax4.legend(fontsize=6, labelcolor=MPL_MUTED,
-                   facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
-
-        # ── 5. BPP (embedding rate) bar chart
-        ax5 = fig.add_subplot(gs[1, 1])
-        bpp_vals = [f["bpp"] for f in valid]
-        _bar(ax5, bpp_vals, "#A78BFA", "BPP")
-        ax5.axhline(y=0.1, color=MPL_RED, linestyle="--",
-                    linewidth=0.8, label="Detection threshold (0.1 bpp)")
-        _style_ax(ax5, "Embedding Rate (BPP) per Fragment", "Bits per Pixel")
-        ax5.legend(fontsize=6, labelcolor=MPL_MUTED,
-                   facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
-
-        # ── 6. Multi-metric line chart (normalised 0–1)
-        ax6 = fig.add_subplot(gs[1, 2])
-        ax6.set_facecolor(MPL_PANEL)
-        norm_psnr = [min(v, 60) / 60 for v in psnr_vals]
-        norm_ssim = ssim_vals
-        norm_kl   = [1 / (1 + v) for v in kl_vals]
-        norm_ber  = [1 / (1 + v * 1000) for v in ber_vals]
-
-        ax6.plot(x, norm_psnr, "o-", color=MPL_CYAN,
-                 linewidth=1.5, markersize=4, label="PSNR (norm)")
-        ax6.plot(x, norm_ssim, "s-", color=MPL_GREEN,
-                 linewidth=1.5, markersize=4, label="SSIM")
-        ax6.plot(x, norm_kl,   "^-", color=MPL_ORANGE,
-                 linewidth=1.5, markersize=4, label="KL (inv)")
-        ax6.plot(x, norm_ber,  "D-", color=MPL_RED,
-                 linewidth=1.5, markersize=4, label="BER (inv)")
-        ax6.set_ylim(0, 1.05)
-        ax6.set_xticks(x)
-        ax6.set_xticklabels([str(i) for i in indices], fontsize=7)
-        ax6.set_title("Normalised Metrics Overview",
-                      color=TEXT_PRIMARY, fontsize=9,
-                      fontweight="bold", fontfamily="monospace", pad=6)
-        ax6.set_ylabel("Score (0–1, higher = better)",
-                       color=MPL_MUTED, fontsize=7.5, fontfamily="monospace")
-        ax6.set_xlabel("Fragment Index",
-                       color=MPL_MUTED, fontsize=7.5, fontfamily="monospace")
-        ax6.tick_params(colors=MPL_MUTED, labelsize=7)
-        for spine in ax6.spines.values():
-            spine.set_edgecolor(MPL_BORDER)
-        ax6.grid(color=MPL_BORDER, linestyle="--",
-                 linewidth=0.5, alpha=0.7)
-        ax6.legend(fontsize=6, labelcolor=MPL_MUTED,
-                   facecolor=MPL_PANEL, edgecolor=MPL_BORDER)
-
-        # ── 7. Summary statistics table (bottom row, spans all 3 cols)
-        ax7 = fig.add_subplot(gs[2, :])
-        ax7.set_facecolor(MPL_BG)
-        ax7.axis("off")
-
-        col_labels = [
-            "Metric", "Average", "Min", "Max", "Threshold", "Status"
-        ]
+        col_labels = ["Metric", "Average", "Min", "Max", "Threshold", "Status"]
         metrics_data = [
             [
                 "PSNR (dB)",
@@ -409,33 +330,9 @@ class ReportFrame(tk.Frame):
                 "≥ 0.995 (Good)",
                 "✓ PASS" if summary["avg_ssim"] >= 0.995 else "✗ FAIL",
             ],
-            [
-                "KL Divergence",
-                f"{summary['avg_kl']:.8f}",
-                f"{min(kl_vals):.8f}",
-                f"{max(kl_vals):.8f}",
-                "< 0.0001 (Undetectable)",
-                "✓ PASS" if summary["avg_kl"] < 0.0001 else "✗ RISKY",
-            ],
-            [
-                "BER",
-                f"{summary['avg_ber']:.8f}",
-                f"{min(ber_vals):.8f}",
-                f"{max(ber_vals):.8f}",
-                "< 0.001 (Excellent)",
-                "✓ PASS" if summary["avg_ber"] < 0.001 else "✗ RISKY",
-            ],
-            [
-                "BPP",
-                f"{summary['avg_bpp']:.6f}",
-                f"{min(bpp_vals):.6f}",
-                f"{max(bpp_vals):.6f}",
-                "< 0.1 bpp (Safe)",
-                "✓ PASS" if summary["avg_bpp"] < 0.1 else "✗ RISKY",
-            ],
         ]
 
-        tbl = ax7.table(
+        tbl = ax3.table(
             cellText=metrics_data,
             colLabels=col_labels,
             cellLoc="center",
@@ -443,7 +340,7 @@ class ReportFrame(tk.Frame):
             bbox=[0, 0, 1, 1],
         )
         tbl.auto_set_font_size(False)
-        tbl.set_fontsize(8.5)
+        tbl.set_fontsize(9)
 
         # Style header
         for col in range(len(col_labels)):
@@ -455,7 +352,7 @@ class ReportFrame(tk.Frame):
             cell.set_edgecolor(MPL_BORDER)
 
         # Style data rows
-        row_colors = [MPL_CYAN, MPL_GREEN, MPL_ORANGE, MPL_RED, "#A78BFA"]
+        row_colors = [MPL_CYAN, MPL_GREEN]
         for row_i, row_data in enumerate(metrics_data):
             for col_i in range(len(col_labels)):
                 cell = tbl[row_i + 1, col_i]
@@ -481,19 +378,46 @@ class ReportFrame(tk.Frame):
                         fontfamily="monospace"
                     )
 
-        ax7.set_title(
+        ax3.set_title(
             f"Summary Statistics  —  {n} fragment(s)  |  "
             f"Method: {report.get('pairing_method', 'N/A')}  |  "
             f"File: {report['original_name']}",
             color=TEXT_PRIMARY, fontsize=9,
             fontweight="bold", fontfamily="monospace",
-            pad=8,
+            pad=10,
         )
+
+        # ── 4. Information panel (bottom right)
+        ax4 = fig.add_subplot(gs[1, 1])
+        ax4.set_facecolor(MPL_PANEL)
+        ax4.axis("off")
+
+        info_text = (
+            f"Report Information\n"
+            f"{'─' * 40}\n\n"
+            f"Original File: {report['original_name']}\n"
+            f"SHA-256 Hash: {report['original_hash'][:32]}...\n"
+            f"Total Fragments: {report['total_fragments']}\n"
+            f"Valid Fragments: {summary.get('fragments_ok', 0)}\n"
+            f"Failed Fragments: {summary.get('fragments_err', 0)}\n\n"
+            f"Quality Verdict: {verdict}\n\n"
+            f"PSNR indicates the peak signal-to-noise ratio,\n"
+            f"measuring the quality between original and\n"
+            f"stego images. Higher PSNR = better quality.\n\n"
+            f"SSIM measures structural similarity between\n"
+            f"images, with 1.0 being identical."
+        )
+
+        ax4.text(0.05, 0.95, info_text,
+                 transform=ax4.transAxes,
+                 fontsize=9, verticalalignment='top',
+                 color=TEXT_PRIMARY, fontfamily="monospace",
+                 linespacing=1.5)
 
         # ── Embed figure in Toplevel
         canvas = FigureCanvasTkAgg(fig, master=win)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True, padx=4, pady=4)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
 
         # ── Footer
         footer = tk.Frame(win, bg=MPL_PANEL, height=26)

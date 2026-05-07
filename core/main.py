@@ -86,7 +86,7 @@ class ModeToggle(tk.Frame):
 class StegoApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("StegoVault  //  Comp 401")
+        self.title("Stego Application //  Comp 401")
         self.configure(bg=BG_DARK)
         self.resizable(True, True)
         self.minsize(700, 580)
@@ -103,7 +103,7 @@ class StegoApp(tk.Tk):
                           highlightthickness=1, highlightbackground=BORDER)
         header.pack(fill="x")
         header.pack_propagate(False)
-        make_label(header, "  ◈ STEGO VAULT",
+        make_label(header, "  ◈ STEGO Application",
                    font=FONT_TITLE, color=TEXT_PRIMARY).pack(side="left", padx=(16, 0))
         make_label(header, "multi-carrier steganography  //  comp 401  ",
                    font=FONT_STATUS, color=TEXT_MUTED).pack(side="right")
